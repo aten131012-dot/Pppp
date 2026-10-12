@@ -1,0 +1,1726 @@
+-- NEXORA | Lamborghini Veneno — ส่วนที่ 1/5 (หน้าเลือกโหมด + ปุ่มควบคุม)
+local Players = game:GetService("Players")
+local TS = game:GetService("TweenService")
+local UIS = game:GetService("UserInputService")
+local lp = Players.LocalPlayer
+local env = (getgenv and getgenv()) or _G
+
+-- ===== ตั้งค่า =====
+local BODY_COLOR   = Color3.fromRGB(12, 12, 15)   -- ดำเงา
+local ACCENT_COLOR = Color3.fromRGB(225, 15, 30)  -- แดง
+local NEON_COLOR   = Color3.fromRGB(255, 30, 50)  -- นีออนเริ่มต้น
+local TEXT_COLOR   = Color3.fromRGB(255, 40, 55)  -- ตัวอักษร NEXORA ที่ประตู
+local MAX_SPEED = 190
+local CAR_H = 1.2
+local UI_SCALE = 1   -- ขนาดปุ่มทั้งหมด: 1 = ปกติ, 1.2 = ใหญ่ขึ้น, 0.8 = เล็กลง
+local function S(n) return math.floor(n * UI_SCALE + 0.5) end
+
+-- ล้างของเก่าถ้ารันซ้ำ
+local old = env.NEXORA_CAR
+if old then
+	pcall(function() if old.cleanup then old.cleanup() end end)
+	for _, list in ipairs({old.conns or {}, old.conns3 or {}, old.conns4 or {}, old.conns5 or {}}) do
+		for _, c in ipairs(list) do pcall(function() c:Disconnect() end) end
+	end
+	pcall(function() old.gui:Destroy() end)
+end
+env.NEXORA_MODE = nil
+
+local conns = {}
+local function bind(sig, fn)
+	local c = sig:Connect(fn)
+	table.insert(conns, c)
+	return c
+end
+
+-- ===== GUI =====
+local gui = Instance.new("ScreenGui")
+gui.Name = "NEXORA_Car"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.DisplayOrder = 20
+local ok = pcall(function() gui.Parent = (gethui and gethui()) or game:GetService("CoreGui") end)
+if not ok or not gui.Parent then gui.Parent = lp:WaitForChild("PlayerGui") end
+
+local INK = Color3.fromRGB(10, 10, 14)
+local WHITE = Color3.fromRGB(240, 242, 250)
+local GREY = Color3.fromRGB(170, 175, 190)
+local PURPLE = Color3.fromRGB(175, 80, 255)
+local ARROW = Color3.fromRGB(255, 70, 85)
+local SSB = Enum.Font.SourceSansBold
+
+local function isPress(i)
+	return i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch
+end
+
+local function styleBtn(b, accent, bar)
+	b.AutoButtonColor = false
+	b.BorderSizePixel = 0
+	b.BackgroundColor3 = INK
+	b.BackgroundTransparency = 0.15
+	b.TextColor3 = WHITE
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = b
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = accent
+	stroke.Thickness = 2
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Parent = b
+	if bar then
+		local f = Instance.new("Frame")
+		f.Size = UDim2.new(0, 4, 0.56, 0)
+		f.Position = UDim2.new(0, 8, 0.22, 0)
+		f.BackgroundColor3 = accent
+		f.BorderSizePixel = 0
+		f.Parent = b
+		Instance.new("UICorner", f).CornerRadius = UDim.new(1, 0)
+	end
+	local dark = accent:Lerp(Color3.new(0, 0, 0), 0.55)
+	b.InputBegan:Connect(function(i)
+		if isPress(i) then
+			TS:Create(b, TweenInfo.new(0.08), {BackgroundColor3 = dark, BackgroundTransparency = 0.03}):Play()
+			TS:Create(stroke, TweenInfo.new(0.08), {Thickness = 3.4}):Play()
+		end
+	end)
+	b.InputEnded:Connect(function(i)
+		if isPress(i) then
+			TS:Create(b, TweenInfo.new(0.15), {BackgroundColor3 = INK, BackgroundTransparency = 0.15}):Play()
+			TS:Create(stroke, TweenInfo.new(0.15), {Thickness = 2}):Play()
+		end
+	end)
+end
+
+-- ปุ่มที่เปลี่ยนข้อความตามโหมด (คอม = โชว์ตัวอักษรคีย์)
+local labelled = {}
+local function setLabel(b, d)
+	if env.NEXORA_MODE == "pc" and d.key then
+		b.Text = d.stack and (d.text .. "\n" .. d.key) or (d.text .. " [" .. d.key .. "]")
+	else
+		b.Text = d.text
+	end
+end
+local function refreshLabels()
+	for b, d in pairs(labelled) do setLabel(b, d) end
+end
+local function setBtnText(b, t)
+	if labelled[b] then
+		labelled[b].text = t
+		setLabel(b, labelled[b])
+	end
+end
+
+local function makeBtn(o)
+	local b = Instance.new("TextButton")
+	b.Name = o.name
+	b.Size = o.size
+	b.Position = o.pos or UDim2.new()
+	b.AnchorPoint = o.anchor or Vector2.new(0, 0)
+	b.Font = o.font or Enum.Font.GothamBlack
+	b.TextScaled = true
+	b.LayoutOrder = o.order or 0
+	b.Parent = o.parent or gui
+	local cons = Instance.new("UITextSizeConstraint")
+	cons.MaxTextSize = o.ts or 20
+	cons.MinTextSize = 8
+	cons.Parent = b
+	local pad = Instance.new("UIPadding")
+	pad.PaddingLeft = UDim.new(0, o.bar and 16 or 3)
+	pad.PaddingRight = UDim.new(0, 3)
+	pad.PaddingTop = UDim.new(0, 3)
+	pad.PaddingBottom = UDim.new(0, 3)
+	pad.Parent = b
+	styleBtn(b, o.accent, o.bar)
+	labelled[b] = {text = o.text, key = o.key, stack = o.stack}
+	setLabel(b, labelled[b])
+	return b
+end
+
+-- ปุ่มเรียก / ขึ้น / ลง / โหมด
+local callBtn = makeBtn{name = "Call", text = "เรียกรถ", key = "R", font = SSB, ts = 24, bar = true,
+	pos = UDim2.new(1, -S(14), 0.5, -S(36)), size = UDim2.fromOffset(S(130), S(60)), anchor = Vector2.new(1, 0.5), accent = Color3.fromRGB(255, 60, 80)}
+local boardBtn = makeBtn{name = "Board", text = "ขึ้นรถ", key = "F", font = SSB, ts = 24, bar = true,
+	pos = UDim2.new(1, -S(14), 0.5, S(36)), size = UDim2.fromOffset(S(130), S(60)), anchor = Vector2.new(1, 0.5), accent = Color3.fromRGB(70, 255, 170)}
+local exitBtn = makeBtn{name = "Exit", text = "ลงจากรถ", key = "F", font = SSB, ts = 22, bar = true,
+	pos = UDim2.new(0.5, 0, 0, S(48)), size = UDim2.fromOffset(S(150), S(44)), anchor = Vector2.new(0.5, 0), accent = Color3.fromRGB(200, 210, 230)}
+local modeBtn = makeBtn{name = "Mode", text = "โหมด", font = SSB, ts = 18,
+	pos = UDim2.new(0, S(14), 0, S(50)), size = UDim2.fromOffset(S(84), S(38)), accent = Color3.fromRGB(120, 125, 140)}
+
+-- แผงปุ่มขับ (แสดงตอนขับ)
+local drivePanel = Instance.new("Frame")
+drivePanel.Name = "DrivePanel"
+drivePanel.Size = UDim2.fromScale(1, 1)
+drivePanel.BackgroundTransparency = 1
+drivePanel.Parent = gui
+
+-- ซ้ายล่าง: เลี้ยวซ้าย / ขวา
+local left = makeBtn{name = "Left", text = "◀", key = "A", stack = true, ts = 38, parent = drivePanel,
+	pos = UDim2.new(0, S(14), 1, -S(14)), anchor = Vector2.new(0, 1), size = UDim2.fromOffset(S(92), S(92)), accent = ARROW}
+local right = makeBtn{name = "Right", text = "▶", key = "D", stack = true, ts = 38, parent = drivePanel,
+	pos = UDim2.new(0, S(116), 1, -S(14)), anchor = Vector2.new(0, 1), size = UDim2.fromOffset(S(92), S(92)), accent = ARROW}
+
+-- ขวาล่าง: แถวเดียว ไนตรัสบนสุด → เร่ง → ถอย  |  เบรกอยู่ข้างซ้าย
+local backward = makeBtn{name = "Reverse", text = "▼ ถอย", key = "S", font = SSB, ts = 22, parent = drivePanel,
+	pos = UDim2.new(1, -S(14), 1, -S(14)), anchor = Vector2.new(1, 1), size = UDim2.fromOffset(S(100), S(56)), accent = ARROW}
+local forward = makeBtn{name = "Gas", text = "▲ เร่ง", key = "W", font = SSB, ts = 28, parent = drivePanel,
+	pos = UDim2.new(1, -S(14), 1, -S(76)), anchor = Vector2.new(1, 1), size = UDim2.fromOffset(S(100), S(92)), accent = Color3.fromRGB(70, 255, 170)}
+local nitro = makeBtn{name = "Nitro", text = "⚡ ไนตรัส", key = "Shift", font = SSB, ts = 20, parent = drivePanel,
+	pos = UDim2.new(1, -S(14), 1, -S(174)), anchor = Vector2.new(1, 1), size = UDim2.fromOffset(S(100), S(56)), accent = PURPLE}
+local brake = makeBtn{name = "Brake", text = "■ เบรก", key = "Space", font = SSB, ts = 24, parent = drivePanel,
+	pos = UDim2.new(1, -S(124), 1, -S(14)), anchor = Vector2.new(1, 1), size = UDim2.fromOffset(S(100), S(100)), accent = Color3.fromRGB(255, 80, 80)}
+
+-- หลอดไนตรัส (ม่วง)
+local nitroTrack = Instance.new("Frame")
+nitroTrack.Size = UDim2.new(1, -16, 0, 5)
+nitroTrack.Position = UDim2.new(0, 8, 1, -9)
+nitroTrack.BackgroundColor3 = Color3.fromRGB(40, 30, 60)
+nitroTrack.BorderSizePixel = 0
+nitroTrack.Parent = nitro
+local nitroFill = Instance.new("Frame")
+nitroFill.Size = UDim2.new(1, 0, 1, 0)
+nitroFill.BackgroundColor3 = PURPLE
+nitroFill.BorderSizePixel = 0
+nitroFill.Parent = nitroTrack
+
+-- แถบปุ่มฟังก์ชัน Veneno (บนสุดกลางจอ แถวเดียว)
+local funcPanel = Instance.new("Frame")
+funcPanel.Name = "FuncPanel"
+funcPanel.BackgroundTransparency = 1
+funcPanel.AnchorPoint = Vector2.new(0.5, 0)
+funcPanel.Position = UDim2.new(0.5, 0, 0, S(6))
+funcPanel.Size = UDim2.fromOffset(S(8 * 74 + 7 * 4), S(36))
+funcPanel.Parent = gui
+local list = Instance.new("UIListLayout")
+list.FillDirection = Enum.FillDirection.Horizontal
+list.HorizontalAlignment = Enum.HorizontalAlignment.Center
+list.Padding = UDim.new(0, S(4))
+list.SortOrder = Enum.SortOrder.LayoutOrder
+list.Parent = funcPanel
+
+local fbtn = {}
+local function fb(id, text, key, order, accent)
+	fbtn[id] = makeBtn{name = id, text = text, key = key, font = SSB, ts = 15, parent = funcPanel,
+		size = UDim2.fromOffset(S(74), S(36)), accent = accent, order = order}
+end
+fb("door",   "ประตู",    "Z", 1, Color3.fromRGB(255, 190, 40))
+fb("hood",   "กระโปรง",  "X", 2, Color3.fromRGB(255, 190, 40))
+fb("engine", "เครื่อง",   "C", 3, Color3.fromRGB(255, 190, 40))
+fb("wing",   "ปีกหลัง",  "V", 4, Color3.fromRGB(120, 200, 255))
+fb("lights", "ไฟ: เปิด", "L", 5, Color3.fromRGB(235, 245, 255))
+fb("neon",   "นีออน",    "N", 6, NEON_COLOR)
+fb("horn",   "เบิ้ล",     "H", 7, Color3.fromRGB(255, 120, 60))
+fb("assist", "ช่วยขับ: เปิด", "T", 8, Color3.fromRGB(70, 255, 170))
+
+-- เลขความเร็ว + เกียร์
+local speedLbl = Instance.new("TextLabel")
+speedLbl.AnchorPoint = Vector2.new(0.5, 1)
+speedLbl.Position = UDim2.new(0.5, 0, 1, -S(12))
+speedLbl.Size = UDim2.fromOffset(S(260), S(40))
+speedLbl.BackgroundTransparency = 1
+speedLbl.Text = "0 km/h"
+speedLbl.TextColor3 = WHITE
+speedLbl.Font = Enum.Font.GothamBlack
+speedLbl.TextSize = 26
+speedLbl.Parent = gui
+local sst = Instance.new("UIStroke")
+sst.Color = NEON_COLOR
+sst.Thickness = 1.8
+sst.Parent = speedLbl
+
+-- ข้อความช่วยจำคีย์ (เฉพาะโหมดคอม)
+local hint = Instance.new("TextLabel")
+hint.AnchorPoint = Vector2.new(0.5, 1)
+hint.Position = UDim2.new(0.5, 0, 1, -54)
+hint.Size = UDim2.new(1, -420, 0, 22)
+hint.BackgroundTransparency = 1
+hint.Text = "W/S เร่ง-ถอย • A/D เลี้ยว • Shift ไนตรัส • Space เบรก • F ขึ้น/ลง • Z ประตู • X กระโปรง • C เครื่อง • V ปีก • L ไฟ • N นีออน • H เบิ้ลเครื่อง • T ช่วยขับ"
+hint.TextColor3 = GREY
+hint.Font = SSB
+hint.TextScaled = true
+hint.Parent = gui
+local hmax = Instance.new("UITextSizeConstraint")
+hmax.MaxTextSize = 15
+hmax.MinTextSize = 8
+hmax.Parent = hint
+local hst = Instance.new("UIStroke")
+hst.Color = Color3.new(0, 0, 0)
+hst.Thickness = 1
+hst.Parent = hint
+
+-- ===== สถานะ UI =====
+local inp = {fwd = false, back = false, left = false, right = false, nitro = false, brake = false}
+local keys = {}
+local actions = {}
+local lastState, uiReady = "idle", false
+local function setUI(st)
+	lastState = st
+	local d = (st == "driving")
+	local on = uiReady
+	callBtn.Visible = on and not d
+	boardBtn.Visible = on and st == "spawned"
+	exitBtn.Visible = on and d
+	modeBtn.Visible = on and not d
+	drivePanel.Visible = on and d
+	funcPanel.Visible = on and st ~= "idle"
+	speedLbl.Visible = on and d
+	hint.Visible = on and d and env.NEXORA_MODE == "pc"
+	if not d then
+		for k in pairs(inp) do inp[k] = false end
+	end
+end
+
+-- ===== หน้าเลือกโหมด =====
+local intro = Instance.new("Frame")
+intro.Name = "Intro"
+intro.Size = UDim2.fromScale(1, 1)
+intro.BackgroundColor3 = Color3.fromRGB(8, 8, 12)
+intro.BorderSizePixel = 0
+intro.ZIndex = 50
+intro.Active = true
+intro.Parent = gui
+local grad = Instance.new("UIGradient")
+grad.Rotation = 90
+grad.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(8, 8, 12)),
+	ColorSequenceKeypoint.new(0.6, Color3.fromRGB(28, 10, 14)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(80, 8, 18)),
+})
+grad.Parent = intro
+
+local function mkLabel(parent, text, pos, size, ts, color, font)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.AnchorPoint = Vector2.new(0.5, 0.5)
+	l.Position = pos
+	l.Size = size
+	l.Text = text
+	l.TextSize = ts
+	l.TextColor3 = color
+	l.Font = font or Enum.Font.GothamBlack
+	l.ZIndex = 51
+	l.Parent = parent
+	return l
+end
+
+local title = mkLabel(intro, "NEXORA", UDim2.fromScale(0.5, 0.17), UDim2.new(1, 0, 0, 64), 56, WHITE)
+local tst = Instance.new("UIStroke")
+tst.Color = NEON_COLOR
+tst.Thickness = 3
+tst.Parent = title
+mkLabel(intro, "LAMBORGHINI VENENO  •  CAR CONTROL", UDim2.fromScale(0.5, 0.29), UDim2.new(1, 0, 0, 22), 16, GREY)
+mkLabel(intro, "เลือกอุปกรณ์ที่คุณใช้เล่น", UDim2.fromScale(0.5, 0.38), UDim2.new(1, 0, 0, 26), 22, WHITE, SSB)
+
+local function pick(mode)
+	env.NEXORA_MODE = mode
+	refreshLabels()
+	intro.Visible = false
+	uiReady = true
+	setUI(lastState)
+end
+
+local function card(icon, name, sub, xoff, mode)
+	local c = Instance.new("TextButton")
+	c.Text = ""
+	c.AutoButtonColor = false
+	c.AnchorPoint = Vector2.new(0.5, 0.5)
+	c.Position = UDim2.new(0.5, xoff, 0.66, 0)
+	c.Size = UDim2.fromOffset(200, 140)
+	c.BackgroundColor3 = INK
+	c.BackgroundTransparency = 0.1
+	c.BorderSizePixel = 0
+	c.ZIndex = 51
+	c.Parent = intro
+	Instance.new("UICorner", c).CornerRadius = UDim.new(0, 14)
+	local st = Instance.new("UIStroke")
+	st.Color = NEON_COLOR
+	st.Thickness = 2
+	st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	st.Parent = c
+	mkLabel(c, icon, UDim2.new(0.5, 0, 0, 42), UDim2.new(1, 0, 0, 56), 44, WHITE)
+	mkLabel(c, name, UDim2.new(0.5, 0, 0, 92), UDim2.new(1, 0, 0, 26), 22, WHITE, SSB)
+	mkLabel(c, sub, UDim2.new(0.5, 0, 0, 118), UDim2.new(1, -12, 0, 20), 14, GREY, SSB)
+	c.MouseEnter:Connect(function()
+		TS:Create(st, TweenInfo.new(0.12), {Thickness = 4}):Play()
+		TS:Create(c, TweenInfo.new(0.12), {BackgroundColor3 = Color3.fromRGB(45, 10, 18)}):Play()
+	end)
+	c.MouseLeave:Connect(function()
+		TS:Create(st, TweenInfo.new(0.12), {Thickness = 2}):Play()
+		TS:Create(c, TweenInfo.new(0.12), {BackgroundColor3 = INK}):Play()
+	end)
+	c.MouseButton1Click:Connect(function() pick(mode) end)
+end
+card("🖥️", "คอมพิวเตอร์", "ใช้คีย์บอร์ด W A S D", -110, "pc")
+card("📱", "มือถือ", "ใช้ปุ่มบนหน้าจอ", 110, "mobile")
+
+modeBtn.MouseButton1Click:Connect(function()
+	uiReady = false
+	setUI(lastState)
+	intro.Visible = true
+end)
+
+-- ===== อ่านการกดปุ่ม + คีย์บอร์ด =====
+local function down(k) return inp[k] or keys[k] end
+
+local function hold(btn, key)
+	btn.InputBegan:Connect(function(i) if isPress(i) then inp[key] = true end end)
+	btn.InputEnded:Connect(function(i) if isPress(i) then inp[key] = false end end)
+end
+hold(forward, "fwd") hold(backward, "back") hold(left, "left") hold(right, "right")
+hold(nitro, "nitro") hold(brake, "brake")
+
+local keyMap = {
+	[Enum.KeyCode.W] = "fwd", [Enum.KeyCode.Up] = "fwd",
+	[Enum.KeyCode.S] = "back", [Enum.KeyCode.Down] = "back",
+	[Enum.KeyCode.A] = "left", [Enum.KeyCode.Left] = "left",
+	[Enum.KeyCode.D] = "right", [Enum.KeyCode.Right] = "right",
+	[Enum.KeyCode.LeftShift] = "nitro", [Enum.KeyCode.RightShift] = "nitro",
+	[Enum.KeyCode.Space] = "brake",
+}
+local actKey = {[Enum.KeyCode.R] = "call", [Enum.KeyCode.F] = "toggle"}
+
+bind(UIS.InputBegan, function(i, gp)
+	if gp then return end
+	local k = keyMap[i.KeyCode]
+	if k then keys[k] = true end
+	local a = actKey[i.KeyCode]
+	if a and uiReady and actions[a] then actions[a]() end
+end)
+bind(UIS.InputEnded, function(i)
+	local k = keyMap[i.KeyCode]
+	if k then keys[k] = false end
+end)
+bind(UIS.WindowFocusReleased, function()
+	for k in pairs(inp) do inp[k] = false end
+	for k in pairs(keys) do keys[k] = false end
+end)
+
+setUI("idle")
+
+-- ===== ส่งต่อให้ส่วนที่ 2-5 =====
+env.NEXORA_CAR = {
+	gui = gui, conns = conns, bind = bind,
+	inp = inp, keys = keys, down = down, setUI = setUI, actions = actions,
+	callBtn = callBtn, boardBtn = boardBtn, exitBtn = exitBtn, fbtn = fbtn, setBtnText = setBtnText,
+	speedLbl = speedLbl, nitroFill = nitroFill,
+	opt = {assist = true, lights = true, neon = NEON_COLOR, wingUp = false},
+	BODY_COLOR = BODY_COLOR, ACCENT_COLOR = ACCENT_COLOR, NEON_COLOR = NEON_COLOR,
+	TEXT_COLOR = TEXT_COLOR, MAX_SPEED = MAX_SPEED, CAR_H = CAR_H,
+}
+print("[NEXORA] ส่วนที่ 1 พร้อมแล้ว → รันส่วนที่ 2 ต่อ")-- NEXORA | Lamborghini Veneno — ส่วนที่ 2/5 (โมเดลรถ Veneno ดำ-แดง-ขาว + ฟังก์ชันช่วย)
+local Players = game:GetService("Players")
+local lp = Players.LocalPlayer
+local env = (getgenv and getgenv()) or _G
+local C = env.NEXORA_CAR
+if not C then warn("[NEXORA] ต้องรัน 'ส่วนที่ 1' ก่อน") return end
+local BODY_COLOR, ACCENT, NEONC, TEXT_COLOR = C.BODY_COLOR, C.ACCENT_COLOR, C.NEON_COLOR, C.TEXT_COLOR
+
+local V, A, N, rad = Vector3.new, CFrame.Angles, CFrame.new, math.rad
+local CYL = Enum.PartType.Cylinder
+local CARBON = Color3.fromRGB(24, 24, 28)
+local DGREY = Color3.fromRGB(58, 60, 68)
+local LGREY = Color3.fromRGB(165, 170, 180)
+local WHITEC = Color3.fromRGB(238, 238, 242)
+local GLASS = Color3.fromRGB(18, 26, 38)
+local LIGHT = Color3.fromRGB(225, 245, 255)
+local PURPLE = Color3.fromRGB(175, 80, 255)
+local METAL = Enum.Material.Metal
+local NEON = Enum.Material.Neon
+local GLASSM = Enum.Material.Glass
+
+local function mk(parent, size, cf, color, o)
+	o = o or {}
+	local p = Instance.new("Part")
+	p.Size = size
+	p.Color = color
+	p.Material = o.mat or Enum.Material.SmoothPlastic
+	p.Transparency = o.tr or 0
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	if o.shape then p.Shape = o.shape end
+	if o.refl then p.Reflectance = o.refl end
+	p.CFrame = cf
+	p.Parent = parent
+	return p
+end
+
+-- ล้อ
+local function buildWheel(w)
+	local m = Instance.new("Model")
+	m.Name = "Wheel"
+	local tire = mk(m, V(w, 2.4, 2.4), N(0, 0, 0), Color3.fromRGB(12, 12, 14), {shape = CYL})
+	m.PrimaryPart = tire
+	local f = w / 2
+	mk(m, V(0.12, 1.8, 1.8), N(f + 0.02, 0, 0), DGREY, {shape = CYL, mat = METAL})
+	mk(m, V(0.06, 2.1, 2.1), N(f + 0.03, 0, 0), NEONC, {shape = CYL, mat = NEON})
+	mk(m, V(0.08, 1.7, 1.7), N(f + 0.07, 0, 0), CARBON, {shape = CYL})
+	for k = 0, 4 do
+		mk(m, V(0.1, 1.8, 0.22), N(f + 0.14, 0, 0) * A(k * rad(36), 0, 0), LGREY, {mat = METAL})
+	end
+	for k = 0, 4 do
+		mk(m, V(0.09, 1.4, 0.1), N(f + 0.17, 0, 0) * A(k * rad(36) + rad(18), 0, 0), ACCENT, {mat = NEON})
+	end
+	mk(m, V(0.18, 0.5, 0.5), N(f + 0.2, 0, 0), ACCENT, {shape = CYL, mat = NEON})
+	return m
+end
+
+local function addText(part, face, text, color, strokeColor)
+	local sg = Instance.new("SurfaceGui")
+	sg.Face = face
+	sg.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	sg.PixelsPerStud = 60
+	sg.LightInfluence = 0
+	sg.Parent = part
+	local t = Instance.new("TextLabel")
+	t.Size = UDim2.fromScale(1, 1)
+	t.BackgroundTransparency = 1
+	t.Text = text
+	t.Font = Enum.Font.GothamBlack
+	t.TextScaled = true
+	t.TextColor3 = color
+	t.Parent = sg
+	local pad = Instance.new("UIPadding")
+	pad.PaddingTop = UDim.new(0.2, 0)
+	pad.PaddingBottom = UDim.new(0.2, 0)
+	pad.PaddingLeft = UDim.new(0.08, 0)
+	pad.PaddingRight = UDim.new(0.08, 0)
+	pad.Parent = t
+	local st = Instance.new("UIStroke")
+	st.Color = strokeColor
+	st.Thickness = 1.5
+	st.Parent = t
+end
+
+local function csk(t, r, g, b) return ColorSequenceKeypoint.new(t, Color3.fromRGB(r, g, b)) end
+local function nsk(t, v) return NumberSequenceKeypoint.new(t, v) end
+
+-- ===== สร้างรถ Veneno (หัวรถอยู่ทาง -Z) =====
+local function buildCar()
+	local folder = Instance.new("Folder")
+	folder.Name = "NEXORA_Car"
+	local body = Instance.new("Model")
+	body.Name = "Body"
+	body.Parent = folder
+	local info = {
+		folder = folder, body = body, wheels = {}, tails = {}, heads = {}, smokes = {}, exhs = {},
+		neon = {}, drl = {}, revs = {}, movers = {}, brakeLit = false, revLit = false,
+	}
+	local TAILC = Color3.fromRGB(150, 0, 10)
+	info.tailBase = TAILC
+
+	local PAINT = {refl = 0.35}
+	local NEONO = {mat = NEON}
+	local GL = {mat = GLASSM, tr = 0.4, refl = 0.2}
+
+	local function P(parent, size, pos, color, o, rot)
+		return mk(parent, size, N(pos) * (rot or CFrame.new()), color, o)
+	end
+	local function B(size, pos, color, o, rot) return P(body, size, pos, color, o, rot) end
+	local function NE(parent, size, pos, rot)
+		local p = P(parent, size, pos, NEONC, NEONO, rot)
+		table.insert(info.neon, p)
+		return p
+	end
+	local function tail(size, pos, rot)
+		local t = P(body, size, pos, TAILC, NEONO, rot)
+		table.insert(info.tails, t)
+		return t
+	end
+	local function drl(size, pos, rot)
+		local t = P(body, size, pos, LIGHT, NEONO, rot)
+		table.insert(info.drl, t)
+		return t
+	end
+	local function group(name)
+		local m = Instance.new("Model")
+		m.Name = name
+		m.Parent = folder
+		local pp = mk(m, V(1, 1, 1), N(), CARBON, {tr = 1})
+		m.PrimaryPart = pp
+		local mv = {model = m, v = 0, t = 0, fn = function() return CFrame.new() end}
+		info.movers[name] = mv
+		return m, mv
+	end
+
+	local pivot = B(V(1, 1, 1), V(0, 0, 0), CARBON, {tr = 1})
+	body.PrimaryPart = pivot
+
+	-- ===== ใต้ท้อง + สปลิตเตอร์ + ดิฟฟิวเซอร์ 3 ชั้น =====
+	B(V(6.0, 0.3, 16.4), V(0, -0.6, 0), CARBON)
+	B(V(7.2, 0.12, 2.4), V(0, -0.7, -9.0), CARBON)
+	NE(body, V(7.2, 0.05, 0.1), V(0, -0.7, -10.2))
+	B(V(7.0, 0.04, 0.25), V(0, -0.62, -9.9), WHITEC)                        -- ขอบขาวสปลิตเตอร์
+	local glow = NE(body, V(4.6, 0.05, 12), V(0, -0.76, 0))
+	glow.Transparency = 0.25
+	for i = 0, 2 do
+		B(V(5.4 - i * 0.5, 0.08, 1.8), V(0, -0.5 + i * 0.22, 8.6), CARBON, nil, A(-0.25, 0, 0))
+	end
+	for _, x in ipairs({-1.8, -0.9, 0, 0.9, 1.8}) do
+		B(V(0.08, 0.7, 1.8), V(x, -0.2, 8.6), DGREY)
+	end
+
+	-- ===== ตัวถังหลัก =====
+	B(V(5.2, 1.1, 8.4), V(0, 0.0, -0.9), CARBON)
+	B(V(5.0, 1.4, 6.4), V(0, 0.3, 5.4), CARBON)
+	B(V(4.0, 0.2, 4.6), V(0, 0.2, -0.2), CARBON)
+	B(V(5.0, 0.2, 1.0), V(0, 1.2, 8.2), BODY_COLOR, PAINT)
+	B(V(5.4, 1.3, 0.4), V(0, 0.7, 8.7), CARBON)
+	B(V(6.2, 0.7, 1.2), V(0, 0.0, 8.4), BODY_COLOR, PAINT)
+
+	-- ===== จมูกหน้า + กริลล์ =====
+	B(V(5.6, 0.7, 1.6), V(0, -0.1, -8.2), BODY_COLOR, PAINT)
+	B(V(2.2, 0.35, 0.1), V(0, -0.2, -9.03), CARBON)
+	NE(body, V(2.2, 0.04, 0.1), V(0, 0.0, -9.04))
+	B(V(5.2, 0.5, 0.5), V(0, -0.2, -8.0), CARBON)
+	B(V(0.7, 0.06, 0.5), V(3.2, -0.45, -8.4), CARBON)
+	B(V(0.7, 0.06, 0.5), V(-3.2, -0.45, -8.4), CARBON)
+
+	-- ===== ห้องโดยสาร =====
+	B(V(3.7, 0.1, 2.51), V(0, 1.33, -2.1), GLASS, GL, A(-0.30, 0, 0))
+	B(V(3.4, 0.14, 2.4), V(0, 1.75, 0.3), BODY_COLOR, PAINT)
+	B(V(3.2, 0.1, 1.0), V(0, 1.65, 1.95), GLASS, GL, A(0.1, 0, 0))
+	-- แถบขาว-แดงบนหลังคา
+	B(V(0.45, 0.03, 2.4), V(0, 1.84, 0.3), WHITEC)
+	B(V(0.12, 0.03, 2.4), V(-0.35, 1.84, 0.3), ACCENT)
+	B(V(0.12, 0.03, 2.4), V(0.35, 1.84, 0.3), ACCENT)
+	B(V(3.6, 0.5, 1.0), V(0, 0.75, -2.7), CARBON)
+	NE(body, V(1.2, 0.03, 0.4), V(0, 1.02, -2.6))
+	local SEAT = Color3.fromRGB(34, 34, 40)
+	for _, s in ipairs({1, -1}) do
+		B(V(1.2, 0.4, 1.4), V(0.95 * s, 0.0, 0.4), SEAT)
+		B(V(1.2, 1.2, 0.3), V(0.95 * s, 0.75, 1.05), SEAT, nil, A(0.15, 0, 0))
+		B(V(0.4, 0.3, 0.25), V(0.95 * s, 1.45, 1.1), SEAT)
+		B(V(0.5, 0.9, 0.05), V(0.95 * s, 0.75, 0.88), ACCENT, nil, A(0.15, 0, 0))
+	end
+	B(V(0.1, 0.85, 0.85), V(-0.95, 1.0, -1.55), CARBON, {shape = CYL}, A(-0.6, 0, 0) * A(0, rad(90), 0))
+
+	-- ===== เครื่อง V12 =====
+	B(V(2.8, 0.7, 2.6), V(0, 0.7, 4.6), CARBON, {mat = METAL})
+	for _, s in ipairs({1, -1}) do
+		B(V(0.7, 0.2, 2.2), V(0.8 * s, 1.08, 4.6), ACCENT, {mat = METAL})
+	end
+	NE(body, V(0.1, 0.05, 2.4), V(0, 1.1, 4.6))
+
+	-- ===== ครีบฉลามกลางหลัง =====
+	B(V(0.2, 1.0, 7.2), V(0, 1.9, 5.2), BODY_COLOR, PAINT, A(-0.09, 0, 0))
+	B(V(0.22, 0.1, 6.6), V(0, 2.2, 5.3), WHITEC, nil, A(-0.09, 0, 0))
+	B(V(0.22, 0.05, 6.8), V(0, 2.42, 5.3), ACCENT, {mat = NEON}, A(-0.09, 0, 0))
+
+	-- ===== ฝากระโปรงหน้า (เปิดได้) =====
+	B(V(4.6, 0.4, 5.6), V(0, 0.15, -5.4), CARBON)
+	do
+		local m, mv = group("Hood")
+		local hinge = N(0, 0.9, -2.8)
+		mv.fn = function(v) return hinge * A(v * 0.65, 0, 0) * hinge:Inverse() end
+		local hoodCF = N(0, 0.55, -5.4) * A(-0.14, 0, 0)
+		mk(m, V(5.0, 0.25, 5.6), hoodCF, BODY_COLOR, {refl = 0.35})
+		mk(m, V(0.5, 0.03, 5.4), hoodCF * N(0, 0.14, 0), WHITEC)             -- แถบขาวกลางฝากระโปรง
+		for _, x in ipairs({-0.9, 0.9}) do
+			local l = mk(m, V(0.1, 0.04, 5.2), hoodCF * N(x, 0.14, 0), NEONC, {mat = NEON})
+			table.insert(info.neon, l)
+		end
+		for i = 0, 2 do
+			mk(m, V(1.4, 0.03, 0.14), hoodCF * N(0, 0.15, 1.4 + i * 0.3), DGREY)
+		end
+	end
+
+	-- ===== ฝาเครื่องยนต์ (เปิดได้) =====
+	do
+		local m, mv = group("Engine")
+		local hinge = N(0, 1.55, 2.4)
+		mv.fn = function(v) return hinge * A(-v * 0.75, 0, 0) * hinge:Inverse() end
+		for _, s in ipairs({1, -1}) do
+			mk(m, V(1.7, 0.1, 5.4), N(0.95 * s, 1.5, 5.2) * A(0.05, 0, 0), CARBON, {mat = METAL})
+			for i = 0, 5 do
+				mk(m, V(1.7, 0.06, 0.14), N(0.95 * s, 1.57, 3.0 + i * 0.8), BODY_COLOR, {refl = 0.35})
+			end
+		end
+	end
+
+	-- ===== ปีกหลัง =====
+	for _, s in ipairs({1, -1}) do
+		B(V(0.25, 1.3, 0.7), V(1.6 * s, 2.25, 7.8), CARBON)
+	end
+	do
+		local m, mv = group("Wing")
+		local hinge = N(0, 3.0, 8.1)
+		mv.fn = function(v) return N(0, v * 0.25, 0) * hinge * A(-(0.05 + v * 0.55), 0, 0) * hinge:Inverse() end
+		mk(m, V(6.6, 0.16, 2.0), N(0, 3.0, 8.1), CARBON, {mat = METAL})
+		mk(m, V(6.6, 0.08, 1.0), N(0, 3.14, 8.5) * A(-0.15, 0, 0), BODY_COLOR, {refl = 0.35})
+		local wl = mk(m, V(6.4, 0.04, 0.06), N(0, 3.1, 7.3), NEONC, {mat = NEON})
+		table.insert(info.neon, wl)
+		for _, s in ipairs({1, -1}) do
+			mk(m, V(0.12, 1.0, 2.6), N(3.3 * s, 2.95, 8.1), BODY_COLOR, {refl = 0.35})
+			mk(m, V(0.14, 0.1, 2.4), N(3.3 * s, 2.7, 8.1), WHITEC)             -- แถบขาวปลายปีก
+			local el = mk(m, V(0.14, 0.05, 2.4), N(3.3 * s, 3.2, 8.1), NEONC, {mat = NEON})
+			table.insert(info.neon, el)
+		end
+	end
+
+	-- ===== ท้ายรถ =====
+	local plate = B(V(1.5, 0.4, 0.06), V(0, -0.05, 9.03), Color3.fromRGB(240, 240, 240))
+	addText(plate, Enum.NormalId.Back, "NEXORA", Color3.fromRGB(20, 20, 20), Color3.fromRGB(240, 240, 240))
+	NE(body, V(4.4, 0.06, 0.08), V(0, 1.3, 8.93))
+	tail(V(1.0, 0.07, 0.08), V(0, 0.95, 8.94))
+	local tpl = Instance.new("PointLight")
+	tpl.Color = Color3.fromRGB(255, 20, 20)
+	tpl.Range = 14
+	tpl.Brightness = 0
+	tpl.Parent = B(V(0.5, 0.5, 0.5), V(0, 0.9, 9.4), CARBON, {tr = 1})
+	info.tailPL = tpl
+
+	-- ===== ท่อไอเสีย 3 ท่อ =====
+	for _, e in ipairs({{-1.0, 0.4}, {1.0, 0.4}, {0, 0.95}}) do
+		local x, y = e[1], e[2]
+		B(V(0.9, 0.85, 0.85), V(x, y, 8.95), DGREY, {shape = CYL, mat = METAL}, A(0, rad(90), 0))
+		B(V(0.1, 0.6, 0.6), V(x, y, 9.42), Color3.new(0.02, 0.02, 0.02), {shape = CYL}, A(0, rad(90), 0))
+		local ex = B(V(0.5, 0.5, 0.5), V(x, y, 9.6), CARBON, {tr = 1})
+		local f = Instance.new("ParticleEmitter")
+		f.Texture = "rbxasset://textures/particles/fire_main.dds"
+		f.Color = ColorSequence.new({csk(0, 235, 175, 255), csk(0.4, 175, 80, 255), csk(1, 90, 20, 170)})
+		f.Size = NumberSequence.new({nsk(0, 1.8), nsk(1, 0.2)})
+		f.Transparency = NumberSequence.new({nsk(0, 0.1), nsk(1, 1)})
+		f.Lifetime = NumberRange.new(0.25, 0.4)
+		f.Speed = NumberRange.new(28, 38)
+		f.SpreadAngle = Vector2.new(3, 3)
+		f.LightEmission = 1
+		f.LightInfluence = 0
+		f.LockedToPart = false
+		f.EmissionDirection = Enum.NormalId.Back
+		f.Rate = 0
+		f.Parent = ex
+		local bf = Instance.new("ParticleEmitter")
+		bf.Texture = "rbxasset://textures/particles/fire_main.dds"
+		bf.Color = ColorSequence.new({csk(0, 255, 230, 140), csk(0.5, 255, 120, 20), csk(1, 120, 20, 0)})
+		bf.Size = NumberSequence.new({nsk(0, 1.4), nsk(1, 0.1)})
+		bf.Transparency = NumberSequence.new({nsk(0, 0.05), nsk(1, 1)})
+		bf.Lifetime = NumberRange.new(0.12, 0.22)
+		bf.Speed = NumberRange.new(18, 30)
+		bf.SpreadAngle = Vector2.new(8, 8)
+		bf.LightEmission = 1
+		bf.LightInfluence = 0
+		bf.LockedToPart = false
+		bf.EmissionDirection = Enum.NormalId.Back
+		bf.Rate = 0
+		bf.Parent = ex
+		local l = Instance.new("PointLight")
+		l.Color = PURPLE
+		l.Range = 16
+		l.Brightness = 0
+		l.Parent = ex
+		table.insert(info.exhs, {e = f, bf = bf, l = l, fl = 0})
+	end
+
+	-- ===== ชิ้นส่วนซ้าย/ขวา =====
+	for _, s in ipairs({1, -1}) do
+		B(V(0.55, 0.5, 7.8), V(3.0 * s, -0.35, -0.3), CARBON)
+		NE(body, V(0.08, 0.07, 7.4), V(3.3 * s, -0.5, -0.3))
+		B(V(0.1, 0.06, 7.4), V(3.29 * s, -0.3, -0.3), WHITEC)                -- แถบขาวซิลข้าง
+		B(V(1.0, 0.18, 7.0), V(2.45 * s, 1.15, 0), BODY_COLOR, PAINT)
+		B(V(0.4, 0.95, 2.0), V(2.95 * s, 0.55, 2.8), CARBON)
+		B(V(0.44, 0.06, 1.8), V(2.95 * s, 0.3, 2.8), DGREY)
+		NE(body, V(0.44, 0.06, 1.8), V(2.95 * s, 0.55, 2.8))
+		B(V(0.44, 0.06, 1.8), V(2.95 * s, 0.8, 2.8), DGREY)
+
+		B(V(1.9, 0.3, 3.6), V(2.7 * s, 1.45, -5.2), BODY_COLOR, PAINT)
+		B(V(0.3, 1.5, 3.6), V(2.1 * s, 0.5, -5.2), CARBON)
+		B(V(0.2, 0.25, 3.6), V(3.65 * s, 1.35, -5.2), BODY_COLOR, PAINT)
+		NE(body, V(0.06, 0.06, 3.5), V(3.77 * s, 1.35, -5.2))
+		B(V(1.0, 0.04, 1.4), V(2.9 * s, 1.62, -5.2), CARBON)
+		NE(body, V(1.0, 0.03, 0.08), V(2.9 * s, 1.65, -5.2))
+		B(V(1.3, 0.8, 2.0), V(2.5 * s, 0.35, -7.8), BODY_COLOR, PAINT)
+
+		B(V(1.4, 0.3, 0.1), V(2.0 * s, -0.25, -9.03), CARBON)
+		NE(body, V(1.4, 0.04, 0.12), V(2.0 * s, -0.07, -9.04))
+
+		local hs = B(V(2.2, 0.22, 0.3), V(2.0 * s, 0.1, -8.95), CARBON)
+		drl(V(0.9, 0.08, 0.08), V(1.0 * s, 0.07, -9.12))
+		drl(V(1.2, 0.08, 0.08), V(2.1 * s, 0.19, -9.12), A(0, 0, 0.28 * s))
+		drl(V(1.2, 0.08, 0.08), V(2.1 * s, -0.05, -9.12), A(0, 0, -0.28 * s))
+		drl(V(0.5, 0.16, 0.08), V(2.85 * s, 0.07, -9.12))
+		local sl = Instance.new("SpotLight")
+		sl.Face = Enum.NormalId.Front
+		sl.Angle = 70
+		sl.Range = 110
+		sl.Brightness = 4
+		sl.Color = Color3.fromRGB(235, 245, 255)
+		sl.Enabled = false
+		sl.Parent = hs
+		table.insert(info.heads, sl)
+
+		B(V(2.0, 0.35, 3.8), V(2.9 * s, 1.5, 5.4), BODY_COLOR, PAINT)
+		B(V(0.2, 0.3, 3.8), V(3.85 * s, 1.45, 5.4), BODY_COLOR, PAINT)
+		NE(body, V(0.06, 0.06, 3.7), V(3.97 * s, 1.45, 5.4))
+		B(V(0.9, 1.3, 1.6), V(2.7 * s, 0.45, 7.7), BODY_COLOR, PAINT)
+
+		tail(V(1.6, 0.07, 0.08), V(1.2 * s, 0.95, 8.94))
+		tail(V(1.2, 0.07, 0.08), V(2.3 * s, 1.15, 8.94), A(0, 0, 0.35 * s))
+		tail(V(1.2, 0.07, 0.08), V(2.3 * s, 0.75, 8.94), A(0, 0, -0.35 * s))
+		local rv = B(V(0.8, 0.1, 0.06), V(2.4 * s, 0.1, 9.04), Color3.fromRGB(60, 60, 64))
+		table.insert(info.revs, rv)
+
+		local sp = B(V(0.5, 0.5, 0.5), V(2.95 * s, -1.0, 5.2), CARBON, {tr = 1})
+		local e = Instance.new("ParticleEmitter")
+		e.Texture = "rbxasset://textures/particles/smoke_main.dds"
+		e.Color = ColorSequence.new(Color3.fromRGB(235, 235, 240))
+		e.Size = NumberSequence.new({nsk(0, 2.5), nsk(1, 7)})
+		e.Transparency = NumberSequence.new({nsk(0, 0.45), nsk(1, 1)})
+		e.Lifetime = NumberRange.new(0.8, 1.4)
+		e.Speed = NumberRange.new(3, 7)
+		e.SpreadAngle = Vector2.new(35, 35)
+		e.EmissionDirection = Enum.NormalId.Top
+		e.LockedToPart = false
+		e.Rate = 0
+		e.Parent = sp
+		table.insert(info.smokes, e)
+
+		-- ประตูกรรไกร
+		do
+			local m, mv = group(s > 0 and "DoorR" or "DoorL")
+			local hinge = N(2.9 * s, 1.15, -3.2)
+			mv.fn = function(v) return hinge * A(-v * 0.95, 0, v * 0.38 * s) * hinge:Inverse() end
+			local door = mk(m, V(0.35, 1.1, 4.8), N(2.95 * s, 0.55, -0.8), BODY_COLOR, {refl = 0.35})
+			addText(door, (s > 0) and Enum.NormalId.Right or Enum.NormalId.Left, "NEXORA", TEXT_COLOR, Color3.fromRGB(30, 0, 0))
+			mk(m, V(0.38, 0.1, 4.4), N(2.95 * s, 0.15, -0.8), WHITEC)           -- แถบขาวประตู
+			NE(m, V(0.4, 0.05, 4.8), V(2.95 * s, 0.05, -0.8))
+			NE(m, V(0.4, 0.05, 4.8), V(2.95 * s, 1.0, -0.8))
+			mk(m, V(0.1, 0.85, 3.4), N(2.1 * s, 1.55, -0.1) * A(0, 0, 0.4 * s), GLASS, GL)
+			mk(m, V(0.5, 0.3, 0.55), N(2.75 * s, 1.5, -3.0), BODY_COLOR, {refl = 0.35})
+			NE(m, V(0.52, 0.05, 0.5), V(2.75 * s, 1.36, -3.0))
+		end
+	end
+
+	-- ===== ล้อ =====
+	local function wheelAt(name, x, z, w, side, front)
+		local wm = buildWheel(w)
+		wm.Name = name
+		wm.Parent = folder
+		table.insert(info.wheels, {model = wm, x = x, z = z, side = side, front = front})
+	end
+	wheelAt("FL", -2.85, -5.2, 1.2, -1, true)
+	wheelAt("FR", 2.85, -5.2, 1.2, 1, true)
+	wheelAt("RL", -2.95, 5.2, 1.5, -1, false)
+	wheelAt("RR", 2.95, 5.2, 1.5, 1, false)
+
+	folder.Parent = workspace
+	return info
+end
+
+-- ===== ฟังก์ชันช่วย =====
+local function dirs(y)
+	return Vector3.new(-math.sin(y), 0, -math.cos(y)), Vector3.new(math.cos(y), 0, -math.sin(y))
+end
+
+local function makeRP(folder)
+	local list = {}
+	if folder then table.insert(list, folder) end
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p.Character then table.insert(list, p.Character) end
+	end
+	local rp = RaycastParams.new()
+	rp.FilterType = Enum.RaycastFilterType.Exclude
+	rp.FilterDescendantsInstances = list
+	return rp
+end
+
+local function groundAt(p, folder)
+	local r = workspace:Raycast(p + Vector3.new(0, 12, 0), Vector3.new(0, -300, 0), makeRP(folder))
+	return r and r.Position.Y or nil
+end
+
+local hidden, hiddenDist = {}, nil
+local function hideChar(c)
+	hidden = {}
+	for _, d in ipairs(c:GetDescendants()) do
+		if (d:IsA("BasePart") or d:IsA("Decal")) and d.Name ~= "HumanoidRootPart" then
+			hidden[d] = d.Transparency
+			d.Transparency = 1
+		end
+	end
+	local hum = c:FindFirstChildOfClass("Humanoid")
+	if hum then
+		hiddenDist = hum.DisplayDistanceType
+		hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	end
+end
+local function showChar()
+	for d, t in pairs(hidden) do
+		pcall(function() d.Transparency = t end)
+	end
+	hidden = {}
+	local c = lp.Character
+	local hum = c and c:FindFirstChildOfClass("Humanoid")
+	if hum and hiddenDist then hum.DisplayDistanceType = hiddenDist end
+	hiddenDist = nil
+end
+
+local function avg2(a, b)
+	if a and b then return (a + b) / 2 end
+	return a or b
+end
+
+C.buildCar, C.dirs, C.makeRP, C.groundAt = buildCar, dirs, makeRP, groundAt
+C.hideChar, C.showChar, C.avg2 = hideChar, showChar, avg2
+print("[NEXORA] ส่วนที่ 2 พร้อมแล้ว → รันส่วนที่ 3 ต่อ")-- NEXORA | Lamborghini Veneno — ส่วนที่ 3/5 (ระบบเสียง V12 + เบิ้ลเครื่อง)
+local env = (getgenv and getgenv()) or _G
+local C = env.NEXORA_CAR
+if not (C and C.buildCar) then warn("[NEXORA] ต้องรันส่วนที่ 1 และ 2 ก่อน") return end
+local Debris = game:GetService("Debris")
+
+-- อยากได้เสียงเครื่องจริง: ใส่ "rbxassetid://เลขไอดี" หรือ "file:nexora/engine.mp3" (ต้องมี getcustomasset)
+local BASS = "rbxasset://sounds/bass.mp3"
+local WHOOSH = "rbxasset://sounds/Rocket whoosh 01.wav"
+local IDS = {
+	engine  = BASS,    -- ชั้นล่าง (ทุ้ม)
+	engine2 = BASS,    -- ชั้นกลาง (ขู่)
+	engine3 = BASS,    -- ชั้นบน (แหบ/หวีด V12)
+	scream  = WHOOSH,
+	turbo   = WHOOSH,  -- เสียงสปูลเทอร์โบ
+	wind    = WHOOSH,
+	skid    = WHOOSH,
+	nitro   = WHOOSH,
+	crash = BASS, land = BASS, start = BASS, pop = BASS,
+	door  = "rbxasset://sounds/clickfast.wav",
+	call  = "rbxasset://sounds/electronicpingshort.wav",
+	shift = "rbxasset://sounds/snap.mp3",
+	whoosh = "rbxasset://sounds/swoosh.wav",
+	hyd   = "rbxasset://sounds/swoosh.wav",
+	blow  = WHOOSH,
+}
+-- {ความดัง, ความเร็วเสียง, อายุเสียง(วินาที)}
+local SHOTDEF = {
+	crash = {1.0, 0.5, 5}, land = {0.8, 0.6, 5}, door = {0.9, 1, 3}, call = {0.6, 1, 3},
+	shift = {0.5, 1.5, 3}, whoosh = {0.8, 1.1, 5}, hyd = {0.5, 0.55, 3},
+	pop = {0.9, 2.0, 0.18}, blow = {0.6, 1.5, 1.2}, start = {1.0, 0.7, 1.6},
+}
+
+local function resolve(id)
+	if type(id) == "string" and id:sub(1, 5) == "file:" then
+		if getcustomasset then
+			local okk, r = pcall(getcustomasset, id:sub(6))
+			if okk then return r end
+		end
+		return ""
+	end
+	return id
+end
+
+-- ใส่เอฟเฟกต์ให้ Sound (ถ้าเวอร์ชันไหนไม่รองรับจะข้ามเอง)
+local function fx(s, kind, props)
+	local out
+	pcall(function()
+		local x = Instance.new(kind)
+		for k, v in pairs(props) do x[k] = v end
+		x.Parent = s
+		out = x
+	end)
+	return out
+end
+
+local SFX = {}
+
+function SFX.attach(part)
+	local h = {gear = 1, rpm = 0.1, rev = 0, pthr = 0, nprev = false,
+		revHold = false, limT = 0, limHi = true, alive = true}
+	h.ev = {shift = false, pop = false}
+	local loops = {}
+
+	local function loop(name, extra)
+		local s = Instance.new("Sound")
+		s.Name = name
+		s.SoundId = resolve(IDS[name])
+		s.Looped = true
+		s.Volume = 0
+		s.RollOffMinDistance = 60
+		s.RollOffMaxDistance = 400
+		s.Parent = part
+		if extra then extra(s) end
+		pcall(function() s:Play() end)
+		loops[name] = s
+		return s
+	end
+	loop("engine", function(s)
+		fx(s, "DistortionSoundEffect", {Level = 0.55})
+		fx(s, "EqualizerSoundEffect", {LowGain = 5, MidGain = -3, HighGain = 2})
+		fx(s, "ChorusSoundEffect", {Depth = 0.4, Mix = 0.45, Rate = 4})
+		h.trem = fx(s, "TremoloSoundEffect", {Frequency = 8, Depth = 0.5})
+		fx(s, "ReverbSoundEffect", {DecayTime = 1.2, Density = 0.6, Diffusion = 0.8, DryLevel = 0, WetLevel = -9})
+	end)
+	loop("engine2", function(s)
+		fx(s, "DistortionSoundEffect", {Level = 0.85})
+		fx(s, "EqualizerSoundEffect", {LowGain = -6, MidGain = 4, HighGain = 5})
+	end)
+	loop("engine3", function(s)
+		fx(s, "DistortionSoundEffect", {Level = 0.95})
+		fx(s, "EqualizerSoundEffect", {LowGain = -10, MidGain = 0, HighGain = 8})
+	end)
+	loop("scream", function(s)
+		fx(s, "EqualizerSoundEffect", {LowGain = -10, MidGain = 2, HighGain = 6})
+	end)
+	loop("turbo", function(s)
+		fx(s, "EqualizerSoundEffect", {LowGain = -12, MidGain = -2, HighGain = 8})
+	end)
+	loop("wind") loop("skid") loop("nitro")
+
+	function h.shot(name, volMul, pitchMul)
+		local d = SHOTDEF[name] or {1, 1, 5}
+		local s = Instance.new("Sound")
+		s.SoundId = resolve(IDS[name] or BASS)
+		s.Volume = d[1] * (volMul or 1)
+		s.PlaybackSpeed = d[2] * (pitchMul or 1)
+		s.RollOffMinDistance = 60
+		s.RollOffMaxDistance = 400
+		s.Parent = part
+		if name == "pop" or name == "crash" or name == "start" then
+			fx(s, "DistortionSoundEffect", {Level = 0.75})
+		end
+		pcall(function() s:Play() end)
+		Debris:AddItem(s, d[3] or 5)
+	end
+
+	function h.blip() h.rev = 1 end
+
+	-- ปุ่มเบิ้ล: กดค้าง = เร่งเครื่องชนลิมิตเตอร์ มีเสียงระเบิด + เปลวไฟ
+	function h.horn(on)
+		h.revHold = on
+		if on then
+			h.shot("start", 1.0, 1.3)
+			h.ev.pop = true
+			h.limT, h.limHi = 0, true
+		end
+	end
+
+	local function ease(s, vol, pitch, a)
+		s.Volume = s.Volume + (vol - s.Volume) * a
+		if pitch then s.PlaybackSpeed = s.PlaybackSpeed + (pitch - s.PlaybackSpeed) * a end
+	end
+
+	-- d = {drive, idle, speed, max, thr, nitro, slip, turn, brake, air, dt}
+	function h.update(d)
+		local dt = d.dt
+		local a = math.clamp(dt * 8, 0, 1)
+		local r = math.clamp(d.speed / d.max, 0, 1.6)
+
+		-- เกียร์ 7 สปีด (เกียร์ต้นยาว เกียร์ปลายสั้น)
+		local gearPos = 7 * (math.clamp(r / 1.05, 0, 1.6)) ^ 1.3
+		local g = math.min(math.floor(gearPos) + 1, 7)
+		local within = (g < 7) and (gearPos % 1) or math.clamp(gearPos - 6, 0, 1)
+		if g ~= h.gear then
+			if d.drive and g > h.gear and d.thr > 0 then
+				h.shot("shift")
+				h.shot("pop", 0.7, 1.8)
+				h.ev.shift = true
+				h.rpm = h.rpm * 0.62
+			elseif d.drive and g < h.gear and d.speed > 40 and d.thr <= 0 then
+				h.shot("pop", 0.6, 1.6)             -- ลดเกียร์: เบิ้ลเครื่อง
+				h.ev.pop = true
+				h.rev = math.max(h.rev, 0.65)
+			end
+			h.gear = g
+		end
+
+		-- รอบเครื่อง
+		local rpmT
+		if d.drive then
+			rpmT = (d.thr > 0) and (0.2 + 0.78 * within) or (0.14 + 0.4 * within)
+			if d.thr > 0 and d.speed < 10 then rpmT = 0.85 end
+		else
+			rpmT = 0.12
+		end
+		if h.revHold then                                   -- ลิมิตเตอร์เด้งไปมา
+			h.limT = h.limT + dt
+			if h.limT > 0.085 then
+				h.limT = 0
+				h.limHi = not h.limHi
+				if not h.limHi then
+					h.shot("pop", 0.7, 1.4 + math.random() * 0.5)
+					h.ev.pop = true
+				end
+			end
+			rpmT = h.limHi and 1.0 or 0.78
+		end
+		rpmT = math.max(rpmT, h.rev)
+		h.rev = math.max(h.rev - dt * 1.4, 0)
+		local rate = h.revHold and 18 or ((rpmT > h.rpm) and 9 or 5)
+		h.rpm = h.rpm + (rpmT - h.rpm) * math.clamp(dt * rate, 0, 1)
+
+		-- ปล่อยคันเร่งตอนเร็ว: blow-off + ไอเสียแตกเป็นชุด
+		if d.drive and h.pthr > 0 and d.thr <= 0 and d.speed > 45 and h.rpm > 0.45 then
+			h.shot("blow", 0.7, 1.3)
+			h.ev.pop = true
+			for _ = 1, 6 do
+				task.delay(0.05 + math.random() * 0.9, function()
+					if h.alive then
+						h.shot("pop", 0.5 + math.random() * 0.5, 1.0 + math.random() * 1.2)
+						h.ev.pop = true
+					end
+				end)
+			end
+		end
+		h.pthr = d.thr
+
+		if d.nitro and not h.nprev then h.shot("blow", 1.0, 0.7) end
+		h.nprev = d.nitro
+
+		local running = d.drive or d.idle or h.revHold
+		local mul = (d.drive or h.revHold) and 1 or 0.3
+		local load = (d.thr ~= 0 or h.revHold) and 1 or 0.35
+		local rp = h.rpm
+		if running then
+			ease(loops.engine, (0.3 + 0.35 * load + 0.25 * rp) * mul, 0.4 + rp * 1.0 + (d.nitro and 0.15 or 0), a)
+			ease(loops.engine2, (rp * 0.45 * load) * mul, 0.8 + rp * 1.3, a)
+			ease(loops.engine3, (math.max(rp - 0.4, 0) * 0.6 * load) * mul, 1.6 + rp * 1.8, a)
+			local scr = (d.drive or h.revHold) and (math.clamp((rp - 0.55) * 1.2, 0, 0.5) * (((d.thr > 0) or h.revHold) and 1 or 0.4)) or 0
+			ease(loops.scream, scr, 1.6 + rp * 1.3, a)
+			local tb = (d.drive and d.thr > 0) and math.clamp((rp - 0.3) * 0.5, 0, 0.3) or 0
+			ease(loops.turbo, tb, 2.2 + rp * 1.2, a)
+		else
+			ease(loops.engine, 0, nil, a)
+			ease(loops.engine2, 0, nil, a)
+			ease(loops.engine3, 0, nil, a)
+			ease(loops.scream, 0, nil, a)
+			ease(loops.turbo, 0, nil, a)
+		end
+
+		-- จังหวะสั่นของเครื่องตามรอบ
+		if h.trem then
+			pcall(function() h.trem.Frequency = math.clamp(6 + rp * 14, 1, 20) end)
+		end
+
+		ease(loops.wind, d.drive and math.clamp(r, 0, 1) * 0.45 or 0, 0.7 + r * 0.5, a)
+
+		-- ดริฟต์ / เบรกแรง / เลี้ยวเร็ว
+		local slip = math.clamp(d.slip / 18, 0, 1)
+		local brk = (d.brake and d.speed > 25) and 0.8 or 0
+		local turnVol = math.clamp((d.turn - 40) / 120, 0, 0.5)
+		local skidVol = (d.drive and not d.air) and math.max(slip * 0.9, brk, turnVol) or 0
+		ease(loops.skid, skidVol, 1.5 + slip * 0.4, a)
+
+		ease(loops.nitro, (d.drive and d.nitro) and 0.9 or 0, 0.75, a)
+	end
+
+	function h.destroy()
+		h.alive = false
+		h.revHold = false
+		for _, s in pairs(loops) do pcall(function() s:Destroy() end) end
+		loops = {}
+	end
+
+	return h
+end
+
+C.SFX = SFX
+print("[NEXORA] ส่วนที่ 3 พร้อมแล้ว → รันส่วนที่ 4 ต่อ")-- NEXORA | Lamborghini Veneno — ส่วนที่ 4/5 (ฟิสิกส์ + กล้อง + ขึ้น/ลงรถ)
+local Players = game:GetService("Players")
+local RS = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local lp = Players.LocalPlayer
+local cam = workspace.CurrentCamera
+local env = (getgenv and getgenv()) or _G
+local C = env.NEXORA_CAR
+if not (C and C.buildCar and C.SFX) then warn("[NEXORA] ต้องรันส่วนที่ 1, 2 และ 3 ก่อน") return end
+
+if C.cleanup then pcall(C.cleanup) end
+if C.conns4 then
+	for _, c in ipairs(C.conns4) do pcall(function() c:Disconnect() end) end
+end
+C.conns4 = {}
+local function bind(sig, fn)
+	local c = sig:Connect(fn)
+	table.insert(C.conns4, c)
+	return c
+end
+
+local MAX_SPEED, CAR_H = C.MAX_SPEED, C.CAR_H
+local inp, keys, down, setUI = C.inp, C.keys, C.down, C.setUI
+local callBtn, boardBtn, exitBtn = C.callBtn, C.boardBtn, C.exitBtn
+local speedLbl, nitroFill = C.speedLbl, C.nitroFill
+local opt = C.opt
+local buildCar, dirs, avg2 = C.buildCar, C.dirs, C.avg2
+local hideChar, showChar = C.hideChar, C.showChar
+local SFX = C.SFX
+local N, A = CFrame.new, CFrame.Angles
+local PURPLE = Color3.fromRGB(175, 80, 255)
+local WHITE = Color3.fromRGB(255, 255, 255)
+
+-- ===== สถานะ =====
+local state = "idle"
+local carInfo, folder, bodyModel, carConn, sfx
+local pos, yaw, vel = Vector3.zero, 0, Vector3.zero
+local vy, air = 0, false
+local pitch, roll, steerAng, wheelAng = 0, 0, 0, 0
+local nitroAmt, nitroLocked, nitroCool, wasNitro = 100, false, 0, false
+local shake, lastVf, lastSafe, lastCrash, fovKick = 0, 0, Vector3.zero, 0, 0
+local camYaw, camPitch, camDist, lastDrag = 0, -0.2, 30, 0
+local oldFOV = cam.FieldOfView
+
+local function makeRP() return C.makeRP(folder) end
+local function groundAt(p) return C.groundAt(p, folder) end
+
+local function setState(st)
+	state = st
+	setUI(st)
+	if C.onState then pcall(C.onState, st) end
+end
+
+local function setDoors(t)
+	if not carInfo then return end
+	for _, k in ipairs({"DoorL", "DoorR"}) do
+		local m = carInfo.movers[k]
+		if m then m.t = t end
+	end
+end
+
+-- ===== ฟิสิกส์รถ + กล้อง (ทุกเฟรม) =====
+local function step(dt)
+	if not (folder and bodyModel and bodyModel.PrimaryPart) then return end
+	dt = math.min(dt, 0.05)
+	local drive = (state == "driving")
+	local assist = opt.assist
+	local thr, str, brakeOn, nitroWant = 0, 0, false, false
+	if drive then
+		thr = (down("fwd") and 1 or 0) - (down("back") and 1 or 0)
+		str = (down("left") and 1 or 0) - (down("right") and 1 or 0)
+		brakeOn = down("brake")
+		nitroWant = down("nitro")
+	end
+	local rp = makeRP()
+
+	-- ไนตรัส
+	local nitroOn = false
+	if nitroWant and not nitroLocked and thr >= 0 then
+		nitroOn = true
+		nitroAmt = math.max(nitroAmt - 30 * dt, 0)
+		nitroCool = 1.2
+		if nitroAmt <= 0 then nitroLocked = true end
+		if thr <= 0 then thr = 1 end
+	else
+		nitroCool = nitroCool - dt
+		if nitroCool <= 0 then nitroAmt = math.min(nitroAmt + 12 * dt, 100) end
+		if nitroLocked and nitroAmt >= 25 then nitroLocked = false end
+	end
+	if nitroOn and not wasNitro then shake = math.max(shake, 0.35) fovKick = 10 end
+	wasNitro = nitroOn
+
+	-- เลี้ยว
+	local fwdV, rightV = dirs(yaw)
+	local vf = vel:Dot(fwdV)
+	local maxSteer = 0.62 - (assist and 0.36 or 0.46) * math.clamp(math.abs(vf) / 120, 0, 1)
+	steerAng = steerAng + (str * maxSteer - steerAng) * math.clamp(dt * (assist and 12 or 9), 0, 1)
+	local yawRate = vf / 10.4 * math.tan(steerAng)
+	if brakeOn and math.abs(vf) > 25 then yawRate = yawRate * 1.5 end
+	yaw = yaw + math.clamp(yawRate, -2.8, 2.8) * dt
+
+	fwdV, rightV = dirs(yaw)
+	vf = vel:Dot(fwdV)
+	local vl = vel:Dot(rightV)
+
+	-- การเร่ง
+	local maxF = MAX_SPEED * (nitroOn and 1.45 or 1)
+	local ratio = math.clamp(vf / maxF, 0, 1.3)
+	local pw = math.max(1 - ratio ^ 1.6, 0)
+	local acc = (78 * pw + (ratio < 1 and 5 or 0)) * (nitroOn and 1.9 or 1)
+	if thr > 0 then
+		vf = vf + acc * dt
+	elseif thr < 0 then
+		if vf > 1 then vf = math.max(vf - 85 * dt, 0) else vf = math.max(vf - 38 * dt, -38) end
+	else
+		vf = vf - math.sign(vf) * math.min(math.abs(vf), 14 * dt)
+	end
+	if vf > MAX_SPEED and not nitroOn then vf = vf - 40 * dt end
+	if brakeOn then vf = vf - math.sign(vf) * math.min(math.abs(vf), 95 * dt) end
+
+	-- การเกาะถนน / ดริฟต์
+	local grip = assist and 12 or 9
+	if brakeOn then grip = (math.abs(vf) > 20 and math.abs(str) > 0) and 1.6 or 3 end
+	if math.abs(vf) > 90 and math.abs(steerAng) > 0.2 then grip = math.min(grip, assist and 7 or 5) end
+	vl = vl * (1 - math.clamp(grip * dt, 0, 1))
+	vel = fwdV * vf + rightV * vl
+
+	-- ชนสิ่งกีดขวาง
+	local sp = Vector3.new(vel.X, 0, vel.Z)
+	local spd = sp.Magnitude
+	if spd > 2 then
+		local dir = sp / spd
+		local crash = false
+		for _, off in ipairs({0, -2.8, 2.8}) do
+			local origin = pos + rightV * off + Vector3.new(0, -0.3, 0)
+			local hit = workspace:Raycast(origin, dir * (9.4 + spd * dt), rp)
+			if hit and math.abs(hit.Normal.Y) < 0.6 then
+				local n = Vector3.new(hit.Normal.X, 0, hit.Normal.Z)
+				if n.Magnitude > 0 then
+					n = n.Unit
+					local vn = vel:Dot(n)
+					if vn < 0 then vel = vel - n * vn * 1.4 end
+					vel = vel * 0.8
+					pos = pos + n * math.max(9.4 - hit.Distance, 0) * 0.6
+					crash = true
+				end
+			end
+		end
+		if crash then
+			shake = math.max(shake, math.min(spd / 80, 1))
+			if sfx and spd > 15 and tick() - lastCrash > 0.4 then
+				lastCrash = tick()
+				sfx.shot("crash", math.clamp(spd / 70, 0.4, 1.3))
+			end
+		end
+	end
+	pos = pos + Vector3.new(vel.X, 0, vel.Z) * dt
+
+	-- ความสูงพื้น 4 ล้อ
+	fwdV, rightV = dirs(yaw)
+	local function gh(p)
+		local r = workspace:Raycast(Vector3.new(p.X, pos.Y + 5, p.Z), Vector3.new(0, -160, 0), rp)
+		return r and r.Position.Y or nil
+	end
+	local gFL = gh(pos + fwdV * 5.2 - rightV * 2.9)
+	local gFR = gh(pos + fwdV * 5.2 + rightV * 2.9)
+	local gRL = gh(pos - fwdV * 5.2 - rightV * 2.9)
+	local gRR = gh(pos - fwdV * 5.2 + rightV * 2.9)
+	local gs = {gFL, gFR, gRL, gRR}
+	local sum, cnt = 0, 0
+	for i = 1, 4 do
+		if gs[i] then sum = sum + gs[i]; cnt = cnt + 1 end
+	end
+
+	if cnt > 0 then
+		local target = sum / cnt + CAR_H
+		if air then
+			vy = vy - 85 * dt
+			local ny = pos.Y + vy * dt
+			if ny <= target and vy <= 0 then
+				ny = target
+				if vy < -24 then
+					shake = math.max(shake, 0.5)
+					if sfx then sfx.shot("land", math.clamp(-vy / 50, 0.5, 1.2)) end
+					vy = -vy * 0.3
+				else
+					vy = 0
+					air = false
+				end
+			end
+			pos = Vector3.new(pos.X, ny, pos.Z)
+		else
+			if pos.Y > target + 0.3 then
+				air = true
+			else
+				local ny = pos.Y + (target - pos.Y) * math.clamp(dt * 18, 0, 1)
+				vy = math.clamp((ny - pos.Y) / math.max(dt, 0.001), -50, 50)
+				pos = Vector3.new(pos.X, ny, pos.Z)
+				lastSafe = pos
+			end
+		end
+	else
+		air = true
+		vy = vy - 85 * dt
+		pos = pos + Vector3.new(0, vy * dt, 0)
+	end
+	if pos.Y < lastSafe.Y - 400 then
+		pos = lastSafe + Vector3.new(0, 6, 0)
+		vel, vy, air = Vector3.zero, 0, true
+	end
+
+	-- เอียงตัวถัง
+	local pitchT, rollT = 0, 0
+	if air or cnt == 0 then
+		pitchT = math.clamp(vy / 80, -0.35, 0.35)
+	else
+		local gF, gR = avg2(gFL, gFR), avg2(gRL, gRR)
+		local gLf, gRt = avg2(gFL, gRL), avg2(gFR, gRR)
+		if gF and gR then pitchT = math.atan2(gF - gR, 10.4) end
+		if gLf and gRt then rollT = math.atan2(gRt - gLf, 5.8) end
+		pitchT = pitchT + math.clamp(((vf - lastVf) / math.max(dt, 0.001)) * 0.0007, -0.07, 0.07)
+	end
+	lastVf = vf
+	rollT = rollT + math.clamp(-steerAng * vf * 0.0022, -0.09, 0.09)
+	pitch = pitch + (pitchT - pitch) * math.clamp(dt * 10, 0, 1)
+	roll = roll + (rollT - roll) * math.clamp(dt * 10, 0, 1)
+
+	local cf = CFrame.new(pos) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch, 0, 0) * CFrame.Angles(0, 0, roll)
+	bodyModel:PivotTo(cf)
+
+	-- ล้อ
+	wheelAng = wheelAng + vf * dt / 1.2
+	for _, w in ipairs(carInfo.wheels) do
+		local sa = w.front and steerAng or 0
+		local flip = (w.side < 0) and math.pi or 0
+		local spin = (w.side < 0) and wheelAng or -wheelAng
+		w.model:PivotTo(cf * N(w.x, 0, w.z) * A(0, sa, 0) * A(0, flip, 0) * A(spin, 0, 0))
+	end
+
+	-- ชิ้นส่วนขยับได้
+	local wing = carInfo.movers.Wing
+	if wing then
+		local r = math.clamp(math.abs(vf) / MAX_SPEED, 0, 1.4)
+		local t = 0.35 * math.clamp((r - 0.4) / 0.4, 0, 1)
+		if opt.wingUp then t = 1 end
+		if brakeOn and math.abs(vf) > 30 then t = 1 end
+		wing.t = t
+	end
+	for name, m in pairs(carInfo.movers) do
+		m.v = m.v + (m.t - m.v) * math.clamp(dt * ((name == "Wing") and 6 or 3.5), 0, 1)
+		m.model:PivotTo(cf * m.fn(m.v))
+	end
+
+	-- ไฟเบรก / ไฟถอย / ไฟหน้า
+	local braking = drive and (brakeOn or (thr < 0 and vf > 2))
+	if carInfo.brakeLit ~= braking then
+		carInfo.brakeLit = braking
+		for _, t in ipairs(carInfo.tails) do
+			t.Color = braking and Color3.fromRGB(255, 30, 30) or carInfo.tailBase
+		end
+		if carInfo.tailPL then carInfo.tailPL.Brightness = braking and 2 or 0 end
+	end
+	local rev = drive and thr < 0 and vf < -1
+	if carInfo.revLit ~= rev then
+		carInfo.revLit = rev
+		for _, p in ipairs(carInfo.revs) do
+			p.Material = rev and Enum.Material.Neon or Enum.Material.SmoothPlastic
+			p.Color = rev and WHITE or Color3.fromRGB(60, 60, 64)
+		end
+	end
+	if carInfo.beamOn ~= opt.lights then
+		carInfo.beamOn = opt.lights
+		for _, sl in ipairs(carInfo.heads) do sl.Enabled = opt.lights end
+	end
+
+	-- สีนีออน
+	local nc = nitroOn and PURPLE or opt.neon
+	if carInfo.neonCol ~= nc then
+		carInfo.neonCol = nc
+		for _, p in ipairs(carInfo.neon) do p.Color = nc end
+	end
+
+	-- ควันออกตัว / ดริฟต์
+	local launching = drive and not air and thr > 0 and vf >= 0 and vf < 45 and not brakeOn
+	local drifting = drive and not air and (math.abs(vl) > 9 or (brakeOn and math.abs(vf) > 28))
+	for _, e in ipairs(carInfo.smokes) do e.Rate = (drifting and 45) or (launching and 28) or 0 end
+
+	-- เสียง
+	local ev
+	if sfx then
+		sfx.update({
+			drive = drive, idle = true, speed = math.abs(vf), max = MAX_SPEED, thr = thr, nitro = nitroOn,
+			slip = air and 0 or math.abs(vl), turn = math.abs(yawRate * vf),
+			brake = brakeOn, air = air, dt = dt,
+		})
+		ev = sfx.ev
+	end
+
+	-- ท่อไอเสีย
+	local fire = ev and (ev.shift or ev.pop)
+	for _, x in ipairs(carInfo.exhs) do
+		x.e.Rate = nitroOn and 120 or 0
+		x.fl = math.max((x.fl or 0) - dt, 0)
+		if fire then
+			x.bf:Emit(ev.pop and 10 or 6)
+			x.fl = 0.12
+		end
+		x.l.Color = nitroOn and PURPLE or Color3.fromRGB(255, 140, 40)
+		x.l.Brightness = nitroOn and 3 or ((x.fl > 0) and 4 or 0)
+	end
+	if ev then
+		if ev.shift then shake = math.max(shake, 0.1); fovKick = math.max(fovKick, 5) end
+		ev.shift, ev.pop = false, false
+	end
+
+	if drive then
+		local c = lp.Character
+		local hrp = c and c:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			hrp.CFrame = cf * N(-0.95, 0.6, 0.3)
+			hrp.AssemblyLinearVelocity = Vector3.zero
+		end
+		speedLbl.Text = math.floor(math.abs(vf) * 1.4) .. " km/h  •  G" .. (sfx and sfx.gear or 1)
+		nitroFill.Size = UDim2.new(nitroAmt / 100, 0, 1, 0)
+		nitroFill.BackgroundColor3 = nitroLocked and Color3.fromRGB(120, 70, 90) or PURPLE
+
+		if tick() - lastDrag > 3 then
+			camYaw = camYaw * (1 - math.clamp(dt * 1.5, 0, 1))
+			camPitch = camPitch + (-0.2 - camPitch) * math.clamp(dt * 1.5, 0, 1)
+		end
+		local viewRot = CFrame.Angles(0, yaw + camYaw, 0) * CFrame.Angles(camPitch, 0, 0)
+		local camPos = pos - viewRot.LookVector * camDist + Vector3.new(0, 2.2, 0)
+		local want = CFrame.lookAt(camPos, pos + Vector3.new(0, 2.2, 0) + viewRot.LookVector * 5)
+		shake = math.max(shake - dt * 3, 0)
+		local sh = shake + (nitroOn and 0.12 or 0)
+		if sh > 0 then
+			want = want * N((math.random() - 0.5) * sh * 1.2, (math.random() - 0.5) * sh * 1.2, 0)
+		end
+		cam.CFrame = cam.CFrame:Lerp(want, math.clamp(dt * 10, 0, 1))
+		fovKick = math.max(fovKick - dt * 20, 0)
+		local wantFov = 70 + math.clamp(math.abs(vf) / MAX_SPEED, 0, 1.4) * 14 + (nitroOn and 10 or 0) + fovKick
+		cam.FieldOfView = cam.FieldOfView + (wantFov - cam.FieldOfView) * math.clamp(dt * 4, 0, 1)
+	end
+end
+
+-- ===== หมุนกล้อง =====
+bind(UIS.InputChanged, function(i, gp)
+	if state ~= "driving" then return end
+	if i.UserInputType == Enum.UserInputType.MouseMovement then
+		if UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+			camYaw = camYaw + i.Delta.X * 0.005
+			camPitch = math.clamp(camPitch + i.Delta.Y * 0.004, -1.0, 0.8)
+			lastDrag = tick()
+		end
+	elseif i.UserInputType == Enum.UserInputType.Touch then
+		if not gp then
+			camYaw = camYaw + i.Delta.X * 0.006
+			camPitch = math.clamp(camPitch + i.Delta.Y * 0.005, -1.0, 0.8)
+			lastDrag = tick()
+		end
+	elseif i.UserInputType == Enum.UserInputType.MouseWheel then
+		camDist = math.clamp(camDist - i.Position.Z * 3, 16, 70)
+	end
+end)
+
+-- ===== เรียก / ขึ้น / ลง =====
+local function cleanup()
+	if carConn then carConn:Disconnect() carConn = nil end
+	if sfx then sfx.destroy() sfx = nil end
+	if folder then folder:Destroy() folder = nil end
+	carInfo, bodyModel = nil, nil
+	for k in pairs(inp) do inp[k] = false end
+	for k in pairs(keys) do keys[k] = false end
+	showChar()
+	local c = lp.Character
+	local hrp = c and c:FindFirstChild("HumanoidRootPart")
+	local hum = c and c:FindFirstChildOfClass("Humanoid")
+	if hrp then hrp.Anchored = false end
+	if hum then
+		hum.PlatformStand = false
+		cam.CameraSubject = hum
+	end
+	cam.CameraType = Enum.CameraType.Custom
+	cam.FieldOfView = oldFOV
+	setState("idle")
+end
+
+local function spawnCar()
+	local c = lp.Character
+	local hrp = c and c:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+	if state == "driving" then return end
+	if carConn then carConn:Disconnect() carConn = nil end
+	if sfx then sfx.destroy() sfx = nil end
+	if folder then folder:Destroy() folder = nil end
+
+	carInfo = buildCar()
+	folder = carInfo.folder
+	bodyModel = carInfo.body
+
+	local f = Vector3.new(hrp.CFrame.LookVector.X, 0, hrp.CFrame.LookVector.Z)
+	f = (f.Magnitude > 0) and f.Unit or Vector3.new(0, 0, -1)
+	local R = Vector3.new(-f.Z, 0, f.X)
+	local p = hrp.Position + f * 22
+	local gy = groundAt(p) or (hrp.Position.Y - 3)
+	pos = Vector3.new(p.X, gy + CAR_H + 28, p.Z)
+	lastSafe = pos
+	yaw = math.atan2(-R.X, -R.Z)
+	vel, vy, air = Vector3.zero, 0, true
+	pitch, roll, steerAng, wheelAng, lastVf = 0, 0, 0, 0, 0
+	nitroAmt, nitroLocked, nitroCool, shake, wasNitro, fovKick = 100, false, 0, 0, false, 0
+	setState("spawned")
+
+	sfx = SFX.attach(bodyModel.PrimaryPart)
+	sfx.shot("call")
+	sfx.shot("whoosh")
+	carConn = RS.RenderStepped:Connect(step)
+end
+
+local function boardCar()
+	if state ~= "spawned" or not carInfo then return end
+	local c = lp.Character
+	local hrp = c and c:FindFirstChild("HumanoidRootPart")
+	local hum = c and c:FindFirstChildOfClass("Humanoid")
+	if not (hrp and hum) then return end
+	hideChar(c)
+	hum.PlatformStand = true
+	hrp.Anchored = true
+	cam.CameraType = Enum.CameraType.Scriptable
+	camYaw, camPitch, camDist = 0, -0.2, 30
+	setState("driving")
+	if sfx then
+		sfx.shot("door")
+		sfx.shot("hyd")
+		sfx.shot("start")
+		sfx.blip()
+	end
+	setDoors(1)
+	task.delay(0.9, function()
+		if state == "driving" then
+			setDoors(0)
+			if sfx then sfx.shot("door") end
+		end
+	end)
+end
+
+local function exitCar()
+	if state ~= "driving" then return end
+	local c = lp.Character
+	local hrp = c and c:FindFirstChild("HumanoidRootPart")
+	local hum = c and c:FindFirstChildOfClass("Humanoid")
+	local _, rightV = dirs(yaw)
+	setState("spawned")
+	showChar()
+	for k in pairs(inp) do inp[k] = false end
+	for k in pairs(keys) do keys[k] = false end
+	if hrp then
+		hrp.Anchored = false
+		hrp.CFrame = CFrame.new(pos - rightV * 7 + Vector3.new(0, 3, 0))
+	end
+	if hum then
+		hum.PlatformStand = false
+		cam.CameraSubject = hum
+	end
+	cam.CameraType = Enum.CameraType.Custom
+	cam.FieldOfView = oldFOV
+	if sfx then sfx.shot("door") sfx.shot("hyd") end
+	setDoors(1)
+	task.delay(3, function()
+		if carInfo and state == "spawned" then setDoors(0) end
+	end)
+end
+
+bind(callBtn.MouseButton1Click, spawnCar)
+bind(boardBtn.MouseButton1Click, boardCar)
+bind(exitBtn.MouseButton1Click, exitCar)
+bind(lp.CharacterAdded, cleanup)
+
+C.actions.call = spawnCar
+C.actions.toggle = function()
+	if state == "spawned" then boardCar() elseif state == "driving" then exitCar() end
+end
+
+C.api = {
+	car = function() return carInfo end,
+	sfx = function() return sfx end,
+	state = function() return state end,
+}
+C.cleanup = cleanup
+print("[NEXORA] ส่วนที่ 4 พร้อมแล้ว → รันส่วนที่ 5 ต่อ")-- NEXORA | Lamborghini Veneno — ส่วนที่ 5/5 (ปุ่มฟังก์ชัน: ประตู ฝากระโปรง เครื่อง ปีก ไฟ นีออน แตร ช่วยขับ)
+local UIS = game:GetService("UserInputService")
+local env = (getgenv and getgenv()) or _G
+local C = env.NEXORA_CAR
+if not (C and C.api and C.fbtn) then warn("[NEXORA] ต้องรันส่วนที่ 1-4 ก่อน") return end
+
+if C.conns5 then
+	for _, c in ipairs(C.conns5) do pcall(function() c:Disconnect() end) end
+end
+C.conns5 = {}
+local function bind(sig, fn)
+	local c = sig:Connect(fn)
+	table.insert(C.conns5, c)
+	return c
+end
+
+local opt, fbtn, setBtnText, api = C.opt, C.fbtn, C.setBtnText, C.api
+
+local function isPress(i)
+	return i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch
+end
+
+local function toggleMovers(names)
+	local car = api.car()
+	if not car then return end
+	local first = car.movers[names[1]]
+	if not first then return end
+	local target = (first.t > 0.5) and 0 or 1
+	for _, n in ipairs(names) do
+		local m = car.movers[n]
+		if m then m.t = target end
+	end
+	local s = api.sfx()
+	if s then
+		s.shot("hyd")
+		task.delay(0.35, function() local s2 = api.sfx() if s2 then s2.shot("door") end end)
+	end
+end
+
+local actions = {}
+actions.door   = function() toggleMovers({"DoorL", "DoorR"}) end
+actions.hood   = function() toggleMovers({"Hood"}) end
+actions.engine = function() toggleMovers({"Engine"}) end
+
+actions.wing = function()
+	opt.wingUp = not opt.wingUp
+	local s = api.sfx()
+	if s then s.shot("hyd") end
+	setBtnText(fbtn.wing, opt.wingUp and "ปีก: ยก" or "ปีกหลัง")
+end
+
+actions.lights = function()
+	opt.lights = not opt.lights
+	local s = api.sfx()
+	if s then s.shot("door", 0.6, 1.4) end
+	setBtnText(fbtn.lights, opt.lights and "ไฟ: เปิด" or "ไฟ: ปิด")
+end
+
+local NEONS = {
+	Color3.fromRGB(255, 30, 50),
+	Color3.fromRGB(0, 200, 255),
+	Color3.fromRGB(175, 80, 255),
+	Color3.fromRGB(60, 255, 120),
+	Color3.fromRGB(240, 240, 255),
+	Color3.fromRGB(255, 190, 40),
+}
+local neonIdx = 1
+actions.neon = function()
+	neonIdx = neonIdx % #NEONS + 1
+	opt.neon = NEONS[neonIdx]
+	local s = api.sfx()
+	if s then s.shot("door", 0.5, 1.8) end
+end
+
+actions.assist = function()
+	opt.assist = not opt.assist
+	setBtnText(fbtn.assist, opt.assist and "ช่วยขับ: เปิด" or "ช่วยขับ: ปิด")
+end
+
+for id, fn in pairs(actions) do
+	if fbtn[id] then bind(fbtn[id].MouseButton1Click, fn) end
+end
+local function horn(on)
+	local s = api.sfx()
+	if s then s.horn(on) end
+end
+bind(fbtn.horn.InputBegan, function(i) if isPress(i) then horn(true) end end)
+bind(fbtn.horn.InputEnded, function(i) if isPress(i) then horn(false) end end)
+
+local keyAct = {
+	[Enum.KeyCode.Z] = "door", [Enum.KeyCode.X] = "hood", [Enum.KeyCode.C] = "engine",
+	[Enum.KeyCode.V] = "wing", [Enum.KeyCode.L] = "lights", [Enum.KeyCode.N] = "neon",
+	[Enum.KeyCode.T] = "assist",
+}
+bind(UIS.InputBegan, function(i, gp)
+	if gp then return end
+	if api.state() == "idle" then return end
+	if i.KeyCode == Enum.KeyCode.H then horn(true) return end
+	local a = keyAct[i.KeyCode]
+	if a then actions[a]() end
+end)
+bind(UIS.InputEnded, function(i)
+	if i.KeyCode == Enum.KeyCode.H then horn(false) end
+end)
+
+-- โชว์ไฟตอนรถลงจอด
+C.onState = function(st)
+	if st ~= "spawned" then return end
+	local car = api.car()
+	if not car then return end
+	task.spawn(function()
+		for _ = 1, 3 do
+			for _, p in ipairs(car.drl) do pcall(function() p.Transparency = 0.9 end) end
+			for _, p in ipairs(car.tails) do pcall(function() p.Transparency = 0.9 end) end
+			task.wait(0.12)
+			for _, p in ipairs(car.drl) do pcall(function() p.Transparency = 0 end) end
+			for _, p in ipairs(car.tails) do pcall(function() p.Transparency = 0 end) end
+			task.wait(0.12)
+		end
+	end)
+end
+
+print("[NEXORA] ส่วนที่ 5 พร้อมแล้ว — เลือกโหมด แล้วกด 'เรียกรถ' (คอม: กด R)")
